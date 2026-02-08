@@ -1,6 +1,5 @@
 // ============================================
-// STRATEGY SERVICE
-// Structure-Break + Trend Following Strategy
+// STRATEGY SERVICE - Multi-Signal Trading
 // ============================================
 
 import { randomUUID } from 'crypto';
@@ -10,25 +9,9 @@ import type {
   Indicators,
   RegimeState,
   TradeSignal,
-  SignalDirection,
   SignalStrength,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-
-interface SwingPoints {
-  lastSwingHigh: number;
-  lastSwingLow: number;
-  currentHigh: number;
-  currentLow: number;
-  previousSwingHigh: number;
-  previousSwingLow: number;
-}
-
-interface StructureAnalysis {
-  isBullishBreak: boolean;
-  isBearishBreak: boolean;
-  swingPoints: SwingPoints;
-}
 
 export class StrategyService {
   private config: TradingConfig;
@@ -36,14 +19,14 @@ export class StrategyService {
 
   constructor(config: TradingConfig) {
     this.config = config;
-    logger.info('Strategy', 'Structure-Break strategy initialized', {
+    logger.info('Strategy', 'Multi-signal strategy initialized', {
       cooldownCandles: config.cooldownCandles,
       riskPerTrade: config.riskPerTradePercent,
     });
   }
 
   /**
-   * Evaluate market conditions and generate trade signal if conditions met
+   * Evaluate market - uses multiple signal types for more frequent trades
    */
   public evaluate(
     symbol: string,
@@ -51,253 +34,283 @@ export class StrategyService {
     indicators: Indicators,
     regime: RegimeState
   ): TradeSignal | null {
-    // Rule 1: Only trade when regime allows
-    if (regime.decision !== 'TRADE_ALLOWED') {
+    // Regime filter is now softer - only block on DANGER
+    if (regime.decision === 'DANGER') {
       return null;
     }
 
-    // Check cooldown period
+    // Cooldown: only 2 candles (30 min)
     if (!this.canTrade(symbol, candles)) {
       return null;
     }
 
-    // Analyze market structure
-    const structure = this.analyzeStructure(candles, indicators);
+    const currentPrice = candles[candles.length - 1].close;
 
-    // Check for LONG signal
-    const longSignal = this.checkLongConditions(symbol, candles, indicators, structure, regime);
-    if (longSignal) {
-      this.updateLastSignalTime(symbol, candles);
-      return longSignal;
-    }
+    // Try multiple strategies in order of priority
+    const signal =
+      this.checkEMACrossover(symbol, candles, indicators, regime) ||
+      this.checkRSIReversal(symbol, candles, indicators, regime) ||
+      this.checkMomentumBreakout(symbol, candles, indicators, regime) ||
+      this.checkStructureBreak(symbol, candles, indicators, regime);
 
-    // Check for SHORT signal
-    const shortSignal = this.checkShortConditions(symbol, candles, indicators, structure, regime);
-    if (shortSignal) {
+    if (signal) {
       this.updateLastSignalTime(symbol, candles);
-      return shortSignal;
+      return signal;
     }
 
     return null;
   }
 
   /**
-   * Check if enough time has passed since last signal (cooldown)
+   * STRATEGY 1: EMA Crossover
+   * EMA9 crosses EMA21 → trend change signal
    */
-  private canTrade(symbol: string, candles: Candle[]): boolean {
-    const lastTime = this.lastSignalTime.get(symbol);
-    if (!lastTime) return true;
+  private checkEMACrossover(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState
+  ): TradeSignal | null {
+    if (candles.length < 3) return null;
 
-    const currentTime = candles[candles.length - 1].openTime;
-    const candlesSince = Math.floor((currentTime - lastTime) / (15 * 60 * 1000)); // Assuming 15m candles
+    const currentPrice = candles[candles.length - 1].close;
+    const prevCandle = candles[candles.length - 2];
 
-    return candlesSince >= this.config.cooldownCandles;
+    // Simple approximation: check if price crossed EMA21 recently
+    const prevClose = prevCandle.close;
+    const { ema9, ema21, atr14 } = indicators;
+
+    // Bullish crossover: EMA9 > EMA21 AND previous candle was below EMA21
+    if (ema9 > ema21 && prevClose < ema21 && currentPrice > ema21) {
+      const stopLoss = currentPrice - (atr14 * 1.5);
+      const takeProfit = currentPrice + (atr14 * 3);
+      const rr = (takeProfit - currentPrice) / (currentPrice - stopLoss);
+
+      return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
+        `EMA crossover bullish. EMA9(${ema9.toFixed(0)}) > EMA21(${ema21.toFixed(0)}), RSI: ${indicators.rsi14.toFixed(1)}`
+      );
+    }
+
+    // Bearish crossover: EMA9 < EMA21 AND previous candle was above EMA21
+    if (ema9 < ema21 && prevClose > ema21 && currentPrice < ema21) {
+      const stopLoss = currentPrice + (atr14 * 1.5);
+      const takeProfit = currentPrice - (atr14 * 3);
+      const rr = (currentPrice - takeProfit) / (stopLoss - currentPrice);
+
+      return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
+        `EMA crossover bearish. EMA9(${ema9.toFixed(0)}) < EMA21(${ema21.toFixed(0)}), RSI: ${indicators.rsi14.toFixed(1)}`
+      );
+    }
+
+    return null;
   }
 
   /**
-   * Update last signal time for a symbol
+   * STRATEGY 2: RSI Reversal
+   * RSI oversold (<30) → LONG, RSI overbought (>70) → SHORT
    */
+  private checkRSIReversal(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState
+  ): TradeSignal | null {
+    const currentPrice = candles[candles.length - 1].close;
+    const { rsi14, atr14, ema21 } = indicators;
+
+    // RSI oversold reversal → LONG
+    if (rsi14 < 32 && currentPrice > candles[candles.length - 2].close) {
+      const stopLoss = currentPrice - (atr14 * 1.5);
+      const takeProfit = currentPrice + (atr14 * 2.5);
+      const rr = (takeProfit - currentPrice) / (currentPrice - stopLoss);
+
+      return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
+        `RSI oversold reversal. RSI: ${rsi14.toFixed(1)}, bounce confirmed`
+      );
+    }
+
+    // RSI overbought reversal → SHORT
+    if (rsi14 > 68 && currentPrice < candles[candles.length - 2].close) {
+      const stopLoss = currentPrice + (atr14 * 1.5);
+      const takeProfit = currentPrice - (atr14 * 2.5);
+      const rr = (currentPrice - takeProfit) / (stopLoss - currentPrice);
+
+      return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
+        `RSI overbought reversal. RSI: ${rsi14.toFixed(1)}, rejection confirmed`
+      );
+    }
+
+    return null;
+  }
+
+  /**
+   * STRATEGY 3: Momentum Breakout
+   * Strong volume + directional move + ADX confirms trend
+   */
+  private checkMomentumBreakout(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState
+  ): TradeSignal | null {
+    if (candles.length < 5) return null;
+
+    const current = candles[candles.length - 1];
+    const { atr14, volumeRatio, adx14, ema9, ema21 } = indicators;
+
+    // Need decent volume
+    if (volumeRatio < 1.3) return null;
+
+    const bodySize = Math.abs(current.close - current.open);
+    const candleRange = current.high - current.low;
+    const bodyRatio = candleRange > 0 ? bodySize / candleRange : 0;
+
+    // Need a strong candle (body > 60% of range)
+    if (bodyRatio < 0.6) return null;
+
+    // Bullish momentum: green candle + price > EMA9
+    if (current.close > current.open && current.close > ema9) {
+      const stopLoss = current.low - (atr14 * 0.5);
+      const takeProfit = current.close + (atr14 * 2);
+      const rr = (takeProfit - current.close) / (current.close - stopLoss);
+
+      if (rr >= 1.5) {
+        return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
+          `Momentum breakout LONG. Vol: ${volumeRatio.toFixed(1)}x, Body: ${(bodyRatio * 100).toFixed(0)}%, ADX: ${adx14.toFixed(1)}`
+        );
+      }
+    }
+
+    // Bearish momentum: red candle + price < EMA9
+    if (current.close < current.open && current.close < ema9) {
+      const stopLoss = current.high + (atr14 * 0.5);
+      const takeProfit = current.close - (atr14 * 2);
+      const rr = (current.close - takeProfit) / (stopLoss - current.close);
+
+      if (rr >= 1.5) {
+        return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
+          `Momentum breakout SHORT. Vol: ${volumeRatio.toFixed(1)}x, Body: ${(bodyRatio * 100).toFixed(0)}%, ADX: ${adx14.toFixed(1)}`
+        );
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * STRATEGY 4: Structure Break (original, loosened conditions)
+   */
+  private checkStructureBreak(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState
+  ): TradeSignal | null {
+    if (candles.length < 20) return null;
+
+    const currentPrice = candles[candles.length - 1].close;
+    const { ema21, atr14, rsi14, adx14 } = indicators;
+
+    // Recent highs/lows
+    const recent = candles.slice(-10);
+    const previous = candles.slice(-20, -10);
+    const recentHigh = Math.max(...recent.map(c => c.high));
+    const recentLow = Math.min(...recent.map(c => c.low));
+    const prevHigh = Math.max(...previous.map(c => c.high));
+    const prevLow = Math.min(...previous.map(c => c.low));
+
+    // Bullish break: higher high + price above EMA21
+    if (recentHigh > prevHigh && currentPrice > ema21 && rsi14 < 72) {
+      const stopLoss = recentLow - (atr14 * 0.3);
+      const takeProfit = currentPrice + (atr14 * 2.5);
+      const rr = (takeProfit - currentPrice) / (currentPrice - stopLoss);
+
+      if (rr >= 1.2) {
+        return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
+          `Structure break bullish. New high: ${recentHigh.toFixed(0)} > ${prevHigh.toFixed(0)}, RSI: ${rsi14.toFixed(1)}`
+        );
+      }
+    }
+
+    // Bearish break: lower low + price below EMA21
+    if (recentLow < prevLow && currentPrice < ema21 && rsi14 > 28) {
+      const stopLoss = recentHigh + (atr14 * 0.3);
+      const takeProfit = currentPrice - (atr14 * 2.5);
+      const rr = (currentPrice - takeProfit) / (stopLoss - currentPrice);
+
+      if (rr >= 1.2) {
+        return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
+          `Structure break bearish. New low: ${recentLow.toFixed(0)} < ${prevLow.toFixed(0)}, RSI: ${rsi14.toFixed(1)}`
+        );
+      }
+    }
+
+    return null;
+  }
+
+  // === Helpers ===
+
+  private canTrade(symbol: string, candles: Candle[]): boolean {
+    const lastTime = this.lastSignalTime.get(symbol);
+    if (!lastTime) return true;
+    const currentTime = candles[candles.length - 1].openTime;
+    const candlesSince = Math.floor((currentTime - lastTime) / (15 * 60 * 1000));
+    return candlesSince >= 2; // Only 30 min cooldown (was 4 candles = 60 min)
+  }
+
   private updateLastSignalTime(symbol: string, candles: Candle[]): void {
     this.lastSignalTime.set(symbol, candles[candles.length - 1].openTime);
   }
 
-  /**
-   * Analyze market structure to detect breaks
-   */
-  private analyzeStructure(candles: Candle[], indicators: Indicators): StructureAnalysis {
-    if (candles.length < 20) {
-      return {
-        isBullishBreak: false,
-        isBearishBreak: false,
-        swingPoints: {
-          lastSwingHigh: indicators.lastSwingHigh,
-          lastSwingLow: indicators.lastSwingLow,
-          currentHigh: 0,
-          currentLow: 0,
-          previousSwingHigh: 0,
-          previousSwingLow: 0,
-        },
-      };
-    }
-
-    // Get recent price action (last 10 candles for current structure)
-    const recentCandles = candles.slice(-10);
-    const currentHigh = Math.max(...recentCandles.map(c => c.high));
-    const currentLow = Math.min(...recentCandles.map(c => c.low));
-
-    // Get previous swing points (10-20 candles back)
-    const previousCandles = candles.slice(-20, -10);
-    const previousSwingHigh = Math.max(...previousCandles.map(c => c.high));
-    const previousSwingLow = Math.min(...previousCandles.map(c => c.low));
-
-    // BULLISH structure break: current low > previous low AND current high > previous high
-    const isBullishBreak = currentLow > previousSwingLow && currentHigh > previousSwingHigh;
-
-    // BEARISH structure break: current high < previous high AND current low < previous low
-    const isBearishBreak = currentHigh < previousSwingHigh && currentLow < previousSwingLow;
-
-    return {
-      isBullishBreak,
-      isBearishBreak,
-      swingPoints: {
-        lastSwingHigh: indicators.lastSwingHigh,
-        lastSwingLow: indicators.lastSwingLow,
-        currentHigh,
-        currentLow,
-        previousSwingHigh,
-        previousSwingLow,
-      },
-    };
-  }
-
-  /**
-   * Check all conditions for LONG signal
-   */
-  private checkLongConditions(
-    symbol: string,
-    candles: Candle[],
-    indicators: Indicators,
-    structure: StructureAnalysis,
-    regime: RegimeState
-  ): TradeSignal | null {
-    const currentPrice = candles[candles.length - 1].close;
-
-    // All conditions must be true
-    const conditions = {
-      structureBreak: structure.isBullishBreak,
-      rsiMomentum: indicators.rsi14 > 40 && indicators.rsi14 < 70,
-      priceAboveEma: currentPrice > indicators.ema21,
-      volumeConfirm: indicators.volumeRatio > 1.0,
-      trendExists: indicators.adx14 > 15,
-    };
-
-    if (!Object.values(conditions).every(Boolean)) {
-      return null;
-    }
-
-    // Calculate stop-loss and take-profit
-    const stopLoss = structure.swingPoints.lastSwingLow;
-    const stopDistance = Math.abs(currentPrice - stopLoss);
-    const takeProfit = currentPrice + (stopDistance * 2); // 2:1 R:R minimum
-    const riskRewardRatio = 2.0;
-
-    // Determine signal strength
-    const strength = this.calculateStrength(indicators);
-
-    // Check if EMAs are aligned (bullish)
-    const emasAligned = indicators.ema9 > indicators.ema21 && indicators.ema21 > indicators.ema50;
-
-    const signal: TradeSignal = {
-      id: randomUUID(),
-      symbol,
-      timestamp: candles[candles.length - 1].closeTime,
-      direction: 'LONG',
-      strength,
-      entryPrice: currentPrice,
-      stopLoss,
-      takeProfit,
-      riskRewardRatio,
-      reason: `Bullish structure break detected. RSI: ${indicators.rsi14.toFixed(1)}, ADX: ${indicators.adx14.toFixed(1)}, Vol Ratio: ${indicators.volumeRatio.toFixed(2)}, EMAs aligned: ${emasAligned}`,
-      indicators,
-      regime,
-    };
-
-    logger.signal(symbol, 'LONG', {
-      strength,
-      entry: currentPrice,
-      stop: stopLoss,
-      target: takeProfit,
-      rr: riskRewardRatio,
-    });
-
-    return signal;
-  }
-
-  /**
-   * Check all conditions for SHORT signal
-   */
-  private checkShortConditions(
-    symbol: string,
-    candles: Candle[],
-    indicators: Indicators,
-    structure: StructureAnalysis,
-    regime: RegimeState
-  ): TradeSignal | null {
-    const currentPrice = candles[candles.length - 1].close;
-
-    // All conditions must be true
-    const conditions = {
-      structureBreak: structure.isBearishBreak,
-      rsiMomentum: indicators.rsi14 < 60 && indicators.rsi14 > 30,
-      priceBelowEma: currentPrice < indicators.ema21,
-      volumeConfirm: indicators.volumeRatio > 1.0,
-      trendExists: indicators.adx14 > 15,
-    };
-
-    if (!Object.values(conditions).every(Boolean)) {
-      return null;
-    }
-
-    // Calculate stop-loss and take-profit
-    const stopLoss = structure.swingPoints.lastSwingHigh;
-    const stopDistance = Math.abs(stopLoss - currentPrice);
-    const takeProfit = currentPrice - (stopDistance * 2); // 2:1 R:R minimum
-    const riskRewardRatio = 2.0;
-
-    // Determine signal strength
-    const strength = this.calculateStrength(indicators);
-
-    // Check if EMAs are aligned (bearish)
-    const emasAligned = indicators.ema9 < indicators.ema21 && indicators.ema21 < indicators.ema50;
-
-    const signal: TradeSignal = {
-      id: randomUUID(),
-      symbol,
-      timestamp: candles[candles.length - 1].closeTime,
-      direction: 'SHORT',
-      strength,
-      entryPrice: currentPrice,
-      stopLoss,
-      takeProfit,
-      riskRewardRatio,
-      reason: `Bearish structure break detected. RSI: ${indicators.rsi14.toFixed(1)}, ADX: ${indicators.adx14.toFixed(1)}, Vol Ratio: ${indicators.volumeRatio.toFixed(2)}, EMAs aligned: ${emasAligned}`,
-      indicators,
-      regime,
-    };
-
-    logger.signal(symbol, 'SHORT', {
-      strength,
-      entry: currentPrice,
-      stop: stopLoss,
-      target: takeProfit,
-      rr: riskRewardRatio,
-    });
-
-    return signal;
-  }
-
-  /**
-   * Calculate signal strength based on ADX, volume, and EMA alignment
-   */
   private calculateStrength(indicators: Indicators): SignalStrength {
     const { adx14, volumeRatio, ema9, ema21, ema50 } = indicators;
-
-    // Check EMA alignment (either bullish or bearish)
     const emasAligned =
-      (ema9 > ema21 && ema21 > ema50) || // Bullish alignment
-      (ema9 < ema21 && ema21 < ema50);   // Bearish alignment
+      (ema9 > ema21 && ema21 > ema50) ||
+      (ema9 < ema21 && ema21 < ema50);
 
-    // Strong: High trend strength + high volume + aligned EMAs
-    if (adx14 > 30 && volumeRatio > 1.5 && emasAligned) {
-      return 'strong';
-    }
-
-    // Moderate: Good trend or good volume
-    if (adx14 > 20 || volumeRatio > 1.2) {
-      return 'moderate';
-    }
-
-    // Weak: Minimum requirements met
+    if (adx14 > 25 && volumeRatio > 1.5 && emasAligned) return 'strong';
+    if (adx14 > 15 || volumeRatio > 1.2) return 'moderate';
     return 'weak';
+  }
+
+  private createSignal(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState,
+    direction: 'LONG' | 'SHORT',
+    stopLoss: number,
+    takeProfit: number,
+    rr: number,
+    reason: string
+  ): TradeSignal {
+    const currentPrice = candles[candles.length - 1].close;
+    const strength = this.calculateStrength(indicators);
+
+    const signal: TradeSignal = {
+      id: randomUUID(),
+      symbol,
+      timestamp: candles[candles.length - 1].closeTime,
+      direction,
+      strength,
+      entryPrice: currentPrice,
+      stopLoss,
+      takeProfit,
+      riskRewardRatio: rr,
+      reason,
+      indicators,
+      regime,
+    };
+
+    logger.signal(symbol, direction, {
+      strategy: reason.split('.')[0],
+      strength,
+      entry: currentPrice,
+      stop: stopLoss,
+      target: takeProfit,
+      rr: rr.toFixed(2),
+    });
+
+    return signal;
   }
 }

@@ -164,8 +164,8 @@ export class TradingEngine {
 
       // Step 1: Get recent candles for analysis
       const recentCandles = this.binance.getRecentCandles(symbol, 100);
-      if (recentCandles.length < 50) {
-        logger.warn('TradingEngine', `Not enough candles for ${symbol}, skipping`);
+      if (recentCandles.length < 20) {
+        logger.warn('TradingEngine', `Not enough candles for ${symbol} (${recentCandles.length}/20), skipping`);
         return;
       }
 
@@ -210,8 +210,8 @@ export class TradingEngine {
         }
       }
 
-      // Step 7: Evaluate strategy for new signals (only if regime allows)
-      if (regimeState.decision === 'TRADE_ALLOWED') {
+      // Step 7: Evaluate strategy for new signals (strategy handles regime internally)
+      {
         const signal = this.strategy.evaluate(symbol, recentCandles, indicators, regimeState);
 
         if (signal) {
