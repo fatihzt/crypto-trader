@@ -19,9 +19,10 @@ export const logger = {
     console.log(`${prefix} ${message}`, data ? JSON.stringify(data) : '');
   },
 
-  warn(module: string, message: string, data?: Record<string, unknown>) {
+  warn(module: string, message: string, data?: unknown) {
     const prefix = `${COLORS.gray}${timestamp()}${COLORS.reset} ${COLORS.yellow}⚠ [${module}]${COLORS.reset}`;
-    console.warn(`${prefix} ${message}`, data ? JSON.stringify(data) : '');
+    const extra = data instanceof Error ? data.message : (data ? JSON.stringify(data) : '');
+    console.warn(`${prefix} ${message}`, extra);
   },
 
   error(module: string, message: string, error?: unknown) {

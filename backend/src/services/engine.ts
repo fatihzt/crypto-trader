@@ -77,15 +77,20 @@ export class TradingEngine {
       this.status = 'starting';
       this.startedAt = Date.now();
 
-      // Start Binance service
-      await this.binance.start();
-
-      // Register candle callback (main trading loop)
+      // Register candle callback BEFORE starting Binance
+      // (so we don't miss any candles from polling fallback)
       this.binance.onCandle((candle) => {
         this.onCandleClosed(candle).catch((error) => {
           this.handleError('Candle processing error', error);
         });
       });
+
+      // Start Binance service (won't crash even if initial fetch fails)
+      try {
+        await this.binance.start();
+      } catch (error) {
+        logger.warn('TradingEngine', 'Binance start had errors, polling fallback active', error);
+      }
 
       this.status = 'running';
       logger.info('TradingEngine', 'Trading engine started successfully');
@@ -124,6 +129,12 @@ export class TradingEngine {
   getState(): EngineState {
     const uptime = this.startedAt > 0 ? Date.now() - this.startedAt : 0;
 
+    // Collect current prices
+    const prices: Record<string, number> = {};
+    for (const sym of CONFIG.symbols) {
+      prices[sym] = this.binance.getCurrentPrice(sym);
+    }
+
     return {
       status: this.status,
       startedAt: this.startedAt,
@@ -132,6 +143,7 @@ export class TradingEngine {
       decisionInterval: CONFIG.interval,
       regimes: Object.fromEntries(this.regimes),
       portfolio: this.portfolio.getState(),
+      prices,
       lastSignal: this.lastSignal,
       lastLLMDecision: this.lastLLMDecision,
       errors: this.errors.slice(-10), // Last 10 errors

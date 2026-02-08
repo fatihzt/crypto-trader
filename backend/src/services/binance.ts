@@ -71,13 +71,112 @@ export class BinanceService {
     logger.info('BinanceService', 'Starting Binance market data service');
     this.isRunning = true;
 
-    // Fetch historical candles for each symbol
+    // Fetch historical candles (retry up to 5 times)
     for (const symbol of this.symbols) {
-      await this.fetchHistoricalCandles(symbol);
+      await this.fetchHistoricalWithRetry(symbol, 5);
     }
 
     // Connect to WebSocket
     this.connectWebSocket();
+
+    // Start polling fallback in case WebSocket fails
+    this.startPollingFallback();
+  }
+
+  private async fetchHistoricalWithRetry(symbol: string, maxRetries: number): Promise<void> {
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await this.fetchHistoricalCandles(symbol);
+        return;
+      } catch (error) {
+        logger.warn('BinanceService', `Historical fetch attempt ${attempt}/${maxRetries} failed for ${symbol}`, error);
+        if (attempt < maxRetries) {
+          const delay = Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+          await new Promise(r => setTimeout(r, delay));
+        }
+      }
+    }
+    logger.error('BinanceService', `All ${maxRetries} attempts failed for ${symbol}, will rely on polling`);
+  }
+
+  /**
+   * Polling fallback: fetch latest candles every 60s via REST API
+   * This ensures data flows even if WebSocket is blocked
+   */
+  private pollingInterval: ReturnType<typeof setInterval> | null = null;
+
+  private startPollingFallback(): void {
+    this.pollingInterval = setInterval(async () => {
+      if (!this.isRunning) {
+        if (this.pollingInterval) clearInterval(this.pollingInterval);
+        return;
+      }
+
+      for (const symbol of this.symbols) {
+        try {
+          const url = `${env.BINANCE_REST_URL}/api/v3/klines?symbol=${symbol}&interval=${this.interval}&limit=5`;
+          const response = await fetch(url);
+
+          if (!response.ok) {
+            logger.warn('BinanceService', `Polling failed for ${symbol}: HTTP ${response.status}`);
+            continue;
+          }
+
+          const data = await response.json() as BinanceKlineRest[];
+          const buffer = this.candleBuffers.get(symbol) || [];
+
+          for (const k of data) {
+            const candle: Candle = {
+              symbol,
+              interval: this.interval,
+              openTime: k[0],
+              closeTime: k[6],
+              open: parseFloat(k[1]),
+              high: parseFloat(k[2]),
+              low: parseFloat(k[3]),
+              close: parseFloat(k[4]),
+              volume: parseFloat(k[5]),
+              isClosed: Date.now() > k[6],
+            };
+
+            // Only process closed candles that aren't already in buffer
+            if (candle.isClosed) {
+              const exists = buffer.some(c => c.openTime === candle.openTime);
+              if (!exists) {
+                buffer.push(candle);
+                if (buffer.length > this.bufferSize) {
+                  buffer.shift();
+                }
+                this.candleBuffers.set(symbol, buffer);
+
+                logger.info('BinanceService', `[POLL] New closed candle: ${symbol}`, {
+                  time: new Date(candle.closeTime).toISOString(),
+                  close: candle.close,
+                });
+
+                // Notify callbacks
+                this.candleCallbacks.forEach(cb => {
+                  try { cb(candle); } catch (e) {
+                    logger.error('BinanceService', 'Callback error', e);
+                  }
+                });
+              }
+            } else {
+              // Update latest non-closed candle for price display
+              if (buffer.length > 0 && buffer[buffer.length - 1].openTime === candle.openTime) {
+                buffer[buffer.length - 1] = candle;
+              } else if (!buffer.some(c => c.openTime === candle.openTime)) {
+                buffer.push(candle);
+                if (buffer.length > this.bufferSize) buffer.shift();
+              }
+              this.candleBuffers.set(symbol, buffer);
+            }
+          }
+        } catch (error) {
+          logger.warn('BinanceService', `Polling error for ${symbol}`, error);
+        }
+      }
+    }, 60_000); // Poll every 60 seconds
   }
 
   async stop(): Promise<void> {
@@ -87,6 +186,11 @@ export class BinanceService {
 
     logger.info('BinanceService', 'Stopping Binance market data service');
     this.isRunning = false;
+
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
 
     if (this.ws) {
       this.ws.close();

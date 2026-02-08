@@ -179,6 +179,7 @@ export interface EngineState {
   decisionInterval: string;    // "15m"
   regimes: Record<string, RegimeState>;
   portfolio: PortfolioState;
+  prices: Record<string, number>;
   lastSignal: TradeSignal | null;
   lastLLMDecision: LLMFilterResult | null;
   errors: string[];

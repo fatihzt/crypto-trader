@@ -98,6 +98,7 @@ interface EngineState {
   decisionInterval: string;
   regimes: Record<string, RegimeState>;
   portfolio: PortfolioState;
+  prices: Record<string, number>;
   lastSignal: TradeSignal | null;
   lastLLMDecision: LLMFilterResult | null;
   errors: string[];
@@ -134,19 +135,8 @@ export default function Dashboard() {
         fetchAPI<LLMFilterResult[]>('/api/decisions'),
       ]);
 
-      // Extract current prices from engine state regimes or positions
-      const prices: Record<string, number> = {};
-      if (openPositions.length > 0) {
-        openPositions.forEach(pos => {
-          prices[pos.symbol] = pos.currentPrice;
-        });
-      }
-      // Fallback: try to get prices from portfolio positions
-      if (engineState.portfolio.positions.length > 0) {
-        engineState.portfolio.positions.forEach(pos => {
-          prices[pos.symbol] = pos.currentPrice;
-        });
-      }
+      // Get prices from engine state
+      const prices: Record<string, number> = engineState.prices || {};
 
       setData({
         engineState,
