@@ -15,8 +15,8 @@ async function main(): Promise<void> {
     logger: false, // Use our custom logger instead
   });
 
-  // Register CORS (support multiple origins for local + production)
-  const allowedOrigins = env.FRONTEND_URL.split(',').map(u => u.trim());
+  // Register CORS (support multiple origins, strip trailing slashes)
+  const allowedOrigins = env.FRONTEND_URL.split(',').map(u => u.trim().replace(/\/+$/, ''));
   await fastify.register(cors, {
     origin: allowedOrigins,
     credentials: true,
