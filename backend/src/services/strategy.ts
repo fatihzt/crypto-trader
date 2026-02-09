@@ -51,7 +51,9 @@ export class StrategyService {
       this.checkEMACrossover(symbol, candles, indicators, regime) ||
       this.checkRSIReversal(symbol, candles, indicators, regime) ||
       this.checkMomentumBreakout(symbol, candles, indicators, regime) ||
-      this.checkStructureBreak(symbol, candles, indicators, regime);
+      this.checkStructureBreak(symbol, candles, indicators, regime) ||
+      this.checkEMABounce(symbol, candles, indicators, regime) ||
+      this.checkMeanReversion(symbol, candles, indicators, regime);
 
     if (signal) {
       this.updateLastSignalTime(symbol, candles);
@@ -119,7 +121,7 @@ export class StrategyService {
     const { rsi14, atr14, ema21 } = indicators;
 
     // RSI oversold reversal → LONG
-    if (rsi14 < 32 && currentPrice > candles[candles.length - 2].close) {
+    if (rsi14 < 38 && currentPrice > candles[candles.length - 2].close) {
       const stopLoss = currentPrice - (atr14 * 1.5);
       const takeProfit = currentPrice + (atr14 * 2.5);
       const rr = (takeProfit - currentPrice) / (currentPrice - stopLoss);
@@ -130,7 +132,7 @@ export class StrategyService {
     }
 
     // RSI overbought reversal → SHORT
-    if (rsi14 > 68 && currentPrice < candles[candles.length - 2].close) {
+    if (rsi14 > 62 && currentPrice < candles[candles.length - 2].close) {
       const stopLoss = currentPrice + (atr14 * 1.5);
       const takeProfit = currentPrice - (atr14 * 2.5);
       const rr = (currentPrice - takeProfit) / (stopLoss - currentPrice);
@@ -159,14 +161,14 @@ export class StrategyService {
     const { atr14, volumeRatio, adx14, ema9, ema21 } = indicators;
 
     // Need decent volume
-    if (volumeRatio < 1.3) return null;
+    if (volumeRatio < 1.1) return null;
 
     const bodySize = Math.abs(current.close - current.open);
     const candleRange = current.high - current.low;
     const bodyRatio = candleRange > 0 ? bodySize / candleRange : 0;
 
-    // Need a strong candle (body > 60% of range)
-    if (bodyRatio < 0.6) return null;
+    // Need a strong candle (body > 45% of range)
+    if (bodyRatio < 0.45) return null;
 
     // Bullish momentum: green candle + price > EMA9
     if (current.close > current.open && current.close > ema9) {
@@ -174,7 +176,7 @@ export class StrategyService {
       const takeProfit = current.close + (atr14 * 2);
       const rr = (takeProfit - current.close) / (current.close - stopLoss);
 
-      if (rr >= 1.5) {
+      if (rr >= 1.2) {
         return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
           `Momentum breakout LONG. Vol: ${volumeRatio.toFixed(1)}x, Body: ${(bodyRatio * 100).toFixed(0)}%, ADX: ${adx14.toFixed(1)}`
         );
@@ -187,7 +189,7 @@ export class StrategyService {
       const takeProfit = current.close - (atr14 * 2);
       const rr = (current.close - takeProfit) / (stopLoss - current.close);
 
-      if (rr >= 1.5) {
+      if (rr >= 1.2) {
         return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
           `Momentum breakout SHORT. Vol: ${volumeRatio.toFixed(1)}x, Body: ${(bodyRatio * 100).toFixed(0)}%, ADX: ${adx14.toFixed(1)}`
         );
@@ -225,7 +227,7 @@ export class StrategyService {
       const takeProfit = currentPrice + (atr14 * 2.5);
       const rr = (takeProfit - currentPrice) / (currentPrice - stopLoss);
 
-      if (rr >= 1.2) {
+      if (rr >= 1.0) {
         return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
           `Structure break bullish. New high: ${recentHigh.toFixed(0)} > ${prevHigh.toFixed(0)}, RSI: ${rsi14.toFixed(1)}`
         );
@@ -238,9 +240,116 @@ export class StrategyService {
       const takeProfit = currentPrice - (atr14 * 2.5);
       const rr = (currentPrice - takeProfit) / (stopLoss - currentPrice);
 
-      if (rr >= 1.2) {
+      if (rr >= 1.0) {
         return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
           `Structure break bearish. New low: ${recentLow.toFixed(0)} < ${prevLow.toFixed(0)}, RSI: ${rsi14.toFixed(1)}`
+        );
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * STRATEGY 5: EMA Bounce (Range Market)
+   * Price bounces off EMA21 in a range → trade the bounce
+   */
+  private checkEMABounce(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState
+  ): TradeSignal | null {
+    if (candles.length < 5) return null;
+
+    const current = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+    const { ema21, atr14, rsi14 } = indicators;
+
+    // Only in non-trending conditions (RSI between 35-65)
+    if (rsi14 < 35 || rsi14 > 65) return null;
+
+    const distanceToEMA = Math.abs(current.close - ema21);
+    const proximityThreshold = atr14 * 0.5;
+
+    // Price must be near EMA21
+    if (distanceToEMA > proximityThreshold) return null;
+
+    // Bullish bounce: price was below EMA21, now closing above or near it
+    if (prev.close < ema21 && current.close >= ema21 * 0.999) {
+      const stopLoss = current.low - (atr14 * 0.8);
+      const takeProfit = current.close + (atr14 * 1.8);
+      const rr = (takeProfit - current.close) / (current.close - stopLoss);
+
+      if (rr >= 1.0) {
+        return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
+          `EMA bounce bullish. Price near EMA21(${ema21.toFixed(0)}), RSI: ${rsi14.toFixed(1)}`
+        );
+      }
+    }
+
+    // Bearish bounce: price was above EMA21, now closing below or near it
+    if (prev.close > ema21 && current.close <= ema21 * 1.001) {
+      const stopLoss = current.high + (atr14 * 0.8);
+      const takeProfit = current.close - (atr14 * 1.8);
+      const rr = (current.close - takeProfit) / (stopLoss - current.close);
+
+      if (rr >= 1.0) {
+        return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
+          `EMA bounce bearish. Price near EMA21(${ema21.toFixed(0)}), RSI: ${rsi14.toFixed(1)}`
+        );
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * STRATEGY 6: Mean Reversion
+   * Price deviates too far from EMA50 → expect reversion back
+   */
+  private checkMeanReversion(
+    symbol: string,
+    candles: Candle[],
+    indicators: Indicators,
+    regime: RegimeState
+  ): TradeSignal | null {
+    if (candles.length < 10) return null;
+
+    const current = candles[candles.length - 1];
+    const { ema50, atr14, rsi14, ema21 } = indicators;
+
+    // Distance from EMA50
+    const deviation = current.close - ema50;
+    const deviationATR = Math.abs(deviation) / atr14;
+
+    // Need significant deviation (> 1.5 ATR from EMA50)
+    if (deviationATR < 1.5) return null;
+
+    // Bullish mean reversion: price far below EMA50 + RSI showing oversold tendency
+    if (deviation < 0 && rsi14 < 45 && current.close > candles[candles.length - 2].close) {
+      const stopLoss = current.close - (atr14 * 1.2);
+      const targetDistance = Math.abs(deviation) * 0.5; // Target 50% reversion
+      const takeProfit = current.close + targetDistance;
+      const rr = targetDistance / (current.close - stopLoss);
+
+      if (rr >= 1.0) {
+        return this.createSignal(symbol, candles, indicators, regime, 'LONG', stopLoss, takeProfit, rr,
+          `Mean reversion LONG. ${deviationATR.toFixed(1)}x ATR below EMA50(${ema50.toFixed(0)}), RSI: ${rsi14.toFixed(1)}`
+        );
+      }
+    }
+
+    // Bearish mean reversion: price far above EMA50 + RSI showing overbought tendency
+    if (deviation > 0 && rsi14 > 55 && current.close < candles[candles.length - 2].close) {
+      const stopLoss = current.close + (atr14 * 1.2);
+      const targetDistance = Math.abs(deviation) * 0.5; // Target 50% reversion
+      const takeProfit = current.close - targetDistance;
+      const rr = targetDistance / (stopLoss - current.close);
+
+      if (rr >= 1.0) {
+        return this.createSignal(symbol, candles, indicators, regime, 'SHORT', stopLoss, takeProfit, rr,
+          `Mean reversion SHORT. ${deviationATR.toFixed(1)}x ATR above EMA50(${ema50.toFixed(0)}), RSI: ${rsi14.toFixed(1)}`
         );
       }
     }
@@ -255,7 +364,7 @@ export class StrategyService {
     if (!lastTime) return true;
     const currentTime = candles[candles.length - 1].openTime;
     const candlesSince = Math.floor((currentTime - lastTime) / (15 * 60 * 1000));
-    return candlesSince >= 2; // Only 30 min cooldown (was 4 candles = 60 min)
+    return candlesSince >= 1; // Only 15 min cooldown
   }
 
   private updateLastSignalTime(symbol: string, candles: Candle[]): void {

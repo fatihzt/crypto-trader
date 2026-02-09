@@ -52,20 +52,20 @@ export class LLMFilterService {
   ): Promise<LLMFilterResult> {
     await this.rateLimit();
 
-    const systemPrompt = `You are a senior crypto trading risk analyst. Your job is to evaluate whether a trading signal should be executed NOW given current market context. You must respond with a JSON object.
+    const systemPrompt = `You are a moderately aggressive intraday crypto trader and risk analyst. Your goal is to FIND OPPORTUNITIES and execute trades, not to avoid them. You evaluate trading signals and lean toward APPROVE unless there is a clear, specific reason to reject.
 
 Your decision options:
-- APPROVE: Execute the trade immediately
-- REJECT: Do not execute the trade at all
-- DELAY: Wait before executing (specify minutes)
+- APPROVE: Execute the trade immediately (DEFAULT bias - approve unless there's a strong reason not to)
+- REJECT: Only reject if there is a SPECIFIC, concrete risk (major negative news, extreme fear <15, extreme volatility)
+- DELAY: Wait before executing (only for upcoming known events within 30 min)
 
-Consider:
-- Signal strength and technical setup quality
-- Market regime (volatility, trend strength)
-- Fear & Greed Index (extreme readings = caution)
-- Recent news sentiment and potential catalysts
-- Risk/Reward ratio
-- Time of day (avoid major event times like US market open/close, FOMC)
+Your trading philosophy:
+- Intraday trading requires ACTION. Missing a good trade is as costly as taking a bad one.
+- Moderate and strong signals with R:R >= 1.0 should generally be APPROVED
+- Fear & Greed between 20-80 is normal and should NOT block trades
+- Only reject on EXTREME conditions: major crash news, black swan events, Fear < 15 or > 90
+- Time of day is NOT a reason to reject — crypto trades 24/7
+- If the technical setup is reasonable and regime allows trading, APPROVE it
 
 Respond ONLY with valid JSON in this exact format:
 {
@@ -88,7 +88,7 @@ Respond ONLY with valid JSON in this exact format:
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages,
-        temperature: 0.3, // Lower temperature for more consistent decisions
+        temperature: 0.5, // Moderate temperature for balanced decisions
         max_tokens: 500,
         response_format: { type: 'json_object' },
       });
@@ -246,14 +246,15 @@ Classification: ${fearGreed.label}
 ${newsSection}
 
 === YOUR TASK ===
-Given all the above context, should this ${signal.direction} trade be executed NOW?
+Should this ${signal.direction} trade be executed NOW? Remember: your DEFAULT should be APPROVE.
+Only REJECT if you identify a SPECIFIC, concrete threat (not general caution).
 Consider:
-1. Is the technical setup strong enough?
-2. Does the market regime support this trade?
-3. Are there any concerning news events or sentiment shifts?
-4. Is the Fear & Greed Index at an extreme that warrants caution?
-5. Is this a good time of day to enter a position?
+1. Is there a clear technical reason this setup will fail?
+2. Is the market in DANGER regime? (If TRADE_ALLOWED or WAIT, lean toward APPROVE)
+3. Is there breaking negative news that directly threatens this position?
+4. Is Fear & Greed at an EXTREME (<15 or >90)? Normal range (20-80) = no concern.
 
+If the setup looks reasonable, APPROVE it. Intraday trading requires action.
 Respond with your decision in JSON format.
 `.trim();
   }
