@@ -44,11 +44,11 @@ export class RegimeService {
   }
 
   private classifyVolatility(atrPercent: number): VolatilityRegime {
-    if (atrPercent < 0.8) {
+    if (atrPercent < 0.5) {
       return 'low';
-    } else if (atrPercent < 2.0) {
+    } else if (atrPercent < 2.5) {
       return 'normal';
-    } else if (atrPercent < 4.0) {
+    } else if (atrPercent < 5.0) {
       return 'high';
     } else {
       return 'extreme';
@@ -94,21 +94,12 @@ export class RegimeService {
     trend: TrendRegime,
     fearGreedIndex: number
   ): MarketDecision {
-    // DANGER conditions
-    if (volatility === 'extreme') {
+    // DANGER only on extreme volatility with extreme fear
+    if (volatility === 'extreme' && fearGreedIndex < 10) {
       return 'DANGER';
     }
 
-    if (fearGreedIndex < 10 && volatility === 'high') {
-      return 'DANGER';
-    }
-
-    // WAIT conditions (no edge, no movement)
-    if (volatility === 'low' && trend === 'neutral') {
-      return 'WAIT';
-    }
-
-    // Otherwise, trading is allowed
+    // Everything else: TRADE_ALLOWED (aggressive mode)
     return 'TRADE_ALLOWED';
   }
 
