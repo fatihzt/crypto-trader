@@ -177,22 +177,27 @@ export default function Dashboard() {
 
   if (!data) return null;
 
-  const { engineState, openPositions, closedTrades, llmDecisions, prices } = data;
-  const { portfolio, regimes, status, uptime } = engineState;
+  const { engineState, openPositions = [], closedTrades = [], llmDecisions = [], prices = {} } = data;
+  const portfolio = engineState?.portfolio ?? { totalEquity: 0, availableCash: 0, totalPnL: 0, totalPnLPercent: 0, totalTrades: 0, winRate: 0, positions: [], timestamp: 0 };
+  const regimes = engineState?.regimes ?? {};
+  const status = engineState?.status ?? 'starting';
+  const uptime = engineState?.uptime ?? 0;
 
   // Format helpers
-  const formatPrice = (price: number) => price.toFixed(2);
-  const formatSmall = (val: number) => val.toFixed(4);
-  const formatPercent = (val: number) => `${(val * 100).toFixed(2)}%`;
+  const formatPrice = (price: number) => (price ?? 0).toFixed(2);
+  const formatSmall = (val: number) => (val ?? 0).toFixed(4);
+  const formatPercent = (val: number) => `${((val ?? 0) * 100).toFixed(2)}%`;
   const formatPnL = (pnl: number) => {
-    const color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-    const sign = pnl >= 0 ? '+' : '';
-    return <span style={{ color }}>{sign}{formatPrice(pnl)}</span>;
+    const val = pnl ?? 0;
+    const color = val >= 0 ? 'var(--green)' : 'var(--red)';
+    const sign = val >= 0 ? '+' : '';
+    return <span style={{ color }}>{sign}{formatPrice(val)}</span>;
   };
   const formatPnLPercent = (pnl: number) => {
-    const color = pnl >= 0 ? 'var(--green)' : 'var(--red)';
-    const sign = pnl >= 0 ? '+' : '';
-    return <span style={{ color }}>{sign}{formatPercent(pnl)}</span>;
+    const val = pnl ?? 0;
+    const color = val >= 0 ? 'var(--green)' : 'var(--red)';
+    const sign = val >= 0 ? '+' : '';
+    return <span style={{ color }}>{sign}{formatPercent(val)}</span>;
   };
   const formatUptime = (ms: number) => {
     const hours = Math.floor(ms / 3600000);
@@ -279,7 +284,7 @@ export default function Dashboard() {
           {/* Live Prices */}
           <Card title="LIVE PRICES">
             <div className="space-y-3">
-              {engineState.symbols.map(symbol => {
+              {(engineState?.symbols ?? []).map(symbol => {
                 const price = prices[symbol] || 0;
                 return (
                   <div key={symbol} className="flex justify-between items-center">
@@ -307,12 +312,12 @@ export default function Dashboard() {
                         color: getVolatilityColor(regime.volatility),
                       }}
                     >
-                      {regime.volatility.toUpperCase()}
+                      {(regime.volatility ?? 'unknown').toUpperCase()}
                     </span>
                   </div>
                   <div className="flex items-center justify-between text-sm">
                     <span style={{ color: 'var(--text-secondary)' }}>
-                      Trend: {getTrendSymbol(regime.trend)} {regime.trend.replace('_', ' ')}
+                      Trend: {getTrendSymbol(regime.trend ?? 'neutral')} {(regime.trend ?? 'neutral').replace('_', ' ')}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -320,8 +325,8 @@ export default function Dashboard() {
                       Decision:
                     </span>
                     <div className="flex items-center gap-2">
-                      <span className={`status-dot ${getDecisionStatusClass(regime.decision)}`} />
-                      <span className="text-sm">{regime.decision.replace('_', ' ')}</span>
+                      <span className={`status-dot ${getDecisionStatusClass(regime.decision ?? 'WAIT')}`} />
+                      <span className="text-sm">{(regime.decision ?? 'WAIT').replace('_', ' ')}</span>
                     </div>
                   </div>
                 </div>
@@ -424,11 +429,11 @@ export default function Dashboard() {
                             color: trade.outcome === 'win' ? 'var(--green)' : 'var(--red)',
                           }}
                         >
-                          {trade.outcome.toUpperCase()}
+                          {(trade.outcome ?? 'unknown').toUpperCase()}
                         </span>
                       </td>
                       <td className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        {trade.exitReason.replace('_', ' ')}
+                        {(trade.exitReason ?? '').replace('_', ' ')}
                       </td>
                       <td className="text-right text-xs" style={{ color: 'var(--text-secondary)' }}>
                         {formatDuration(trade.entryTime, trade.exitTime)}
@@ -477,7 +482,7 @@ export default function Dashboard() {
                         {decision.decision}
                       </span>
                       <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                        Confidence: {(decision.confidence * 100).toFixed(0)}%
+                        Confidence: {((decision.confidence ?? 0) * 100).toFixed(0)}%
                       </span>
                     </div>
                     <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
