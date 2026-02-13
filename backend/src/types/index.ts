@@ -201,14 +201,14 @@ export interface TradingConfig {
 }
 
 export const DEFAULT_CONFIG: TradingConfig = {
-  symbols: ['BTCUSDT', 'ETHUSDT'],
-  interval: '15m',
+  symbols: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'DOGEUSDT', 'AVAXUSDT', 'ADAUSDT', 'LINKUSDT', 'MATICUSDT'],
+  interval: '5m',
   initialCapital: 10000,
-  maxPositionPercent: 0.2,
-  maxOpenPositions: 4,
+  maxPositionPercent: 0.15,
+  maxOpenPositions: 12,
   commissionRate: 0.001,
-  cooldownCandles: 1,
-  riskPerTradePercent: 0.025,
-  trailingStopActivation: 0.012,
-  trailingStopDistance: 0.007,
+  cooldownCandles: 0,
+  riskPerTradePercent: 0.02,
+  trailingStopActivation: 0.008,
+  trailingStopDistance: 0.005,
 };

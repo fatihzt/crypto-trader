@@ -210,50 +210,52 @@ export class TradingEngine {
         }
       }
 
-      // Step 7: Evaluate strategy for new signals (strategy handles regime internally)
-      {
+      // Step 7: Evaluate strategy for new signals - try up to 2 signals per candle
+      for (let attempt = 0; attempt < 2; attempt++) {
         const signal = this.strategy.evaluate(symbol, recentCandles, indicators, regimeState);
 
-        if (signal) {
-          this.lastSignal = signal;
+        if (!signal) break;
 
-          // Notify signal generated
-          await this.notify.signalGenerated(signal);
+        this.lastSignal = signal;
 
-          // Step 8: Get latest news for LLM context
-          const newsItems = await this.news.getLatestNews(symbol);
+        // Notify signal generated
+        await this.notify.signalGenerated(signal);
 
-          // Step 9: Send to LLM filter for approval
-          const llmDecision = await this.llm.evaluateSignal(signal, newsItems, fearGreed);
-          this.lastLLMDecision = llmDecision;
+        // Step 8: Get latest news for LLM context
+        const newsItems = await this.news.getLatestNews(symbol);
 
-          // Save signal and LLM decision to Supabase
-          await this.saveSignal(signal);
-          await this.saveLLMDecision(llmDecision);
+        // Step 9: Send to LLM filter for approval
+        const llmDecision = await this.llm.evaluateSignal(signal, newsItems, fearGreed);
+        this.lastLLMDecision = llmDecision;
 
-          // Step 10: Execute trade if LLM approves
-          if (llmDecision.decision === 'APPROVE') {
-            const position = this.trader.executeTrade(signal, currentPrice);
+        // Save signal and LLM decision to Supabase
+        await this.saveSignal(signal);
+        await this.saveLLMDecision(llmDecision);
 
-            if (position) {
-              // Notify trade opened
-              await this.notify.tradeOpened(position, signal, llmDecision);
+        // Step 10: Execute trade if LLM approves
+        if (llmDecision.decision === 'APPROVE') {
+          const position = this.trader.executeTrade(signal, currentPrice);
 
-              logger.info('TradingEngine', `Trade executed: ${signal.direction} ${symbol}`, {
-                positionId: position.id,
-                price: currentPrice,
-                llmConfidence: llmDecision.confidence,
-              });
-            }
-          } else {
-            // Notify trade rejected
-            await this.notify.tradeRejected(signal, llmDecision);
+          if (position) {
+            await this.notify.tradeOpened(position, signal, llmDecision);
 
-            logger.info('TradingEngine', `Trade rejected by LLM: ${symbol}`, {
-              decision: llmDecision.decision,
-              reasoning: llmDecision.reasoning,
+            logger.info('TradingEngine', `Trade executed: ${signal.direction} ${symbol}`, {
+              positionId: position.id,
+              price: currentPrice,
+              llmConfidence: llmDecision.confidence,
             });
+          } else {
+            // Portfolio rejected (max positions or insufficient cash) - stop trying
+            break;
           }
+        } else {
+          await this.notify.tradeRejected(signal, llmDecision);
+
+          logger.info('TradingEngine', `Trade rejected by LLM: ${symbol}`, {
+            decision: llmDecision.decision,
+            reasoning: llmDecision.reasoning,
+          });
+          break; // Don't try again if LLM rejected
         }
       }
 

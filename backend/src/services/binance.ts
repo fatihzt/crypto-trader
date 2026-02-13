@@ -51,8 +51,8 @@ export class BinanceService {
   private maxReconnectAttempts = 10;
   private baseReconnectDelay = 1000; // 1 second
   private isRunning = false;
-  private readonly symbols = ['BTCUSDT', 'ETHUSDT'];
-  private readonly interval = '15m';
+  private readonly symbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'XRPUSDT', 'BNBUSDT', 'DOGEUSDT', 'AVAXUSDT', 'ADAUSDT', 'LINKUSDT', 'MATICUSDT'];
+  private readonly interval = '5m';
   private readonly bufferSize = 200;
 
   constructor() {
@@ -176,7 +176,7 @@ export class BinanceService {
           logger.warn('BinanceService', `Polling error for ${symbol}`, error);
         }
       }
-    }, 60_000); // Poll every 60 seconds
+    }, 30_000); // Poll every 30 seconds for 5m candles
   }
 
   async stop(): Promise<void> {

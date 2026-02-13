@@ -88,12 +88,6 @@ export class PortfolioService {
       return false;
     }
 
-    // Check if already have position in this symbol
-    if (this.positions.has(symbol)) {
-      logger.warn('Portfolio', 'Position already exists for symbol', { symbol });
-      return false;
-    }
-
     // Check if we have enough available cash (at least 10% of portfolio)
     const minCash = this.totalEquity * 0.1;
     if (this.availableCash < minCash) {
@@ -170,7 +164,7 @@ export class PortfolioService {
     };
 
     // Update portfolio
-    this.positions.set(signal.symbol, position);
+    this.positions.set(position.id, position);
     this.availableCash -= totalCost;
 
     logger.trade('OPEN', signal.symbol, {
@@ -260,7 +254,7 @@ export class PortfolioService {
     };
 
     // Update portfolio
-    this.positions.delete(position.symbol);
+    this.positions.delete(position.id);
     this.availableCash += exitValue - exitCommission;
     this.totalEquity = this.availableCash + this.getPositionsValue();
     this.closedTrades.push(closedTrade);
