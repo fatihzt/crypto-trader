@@ -309,27 +309,32 @@ export class BinanceService {
     const buffer = this.candleBuffers.get(candle.symbol) || [];
 
     if (candle.isClosed) {
-      // Check if this candle is already in buffer (avoid duplicates)
       const existingIndex = buffer.findIndex(c => c.openTime === candle.openTime);
+      const alreadyClosed = existingIndex !== -1 && buffer[existingIndex].isClosed;
 
-      if (existingIndex === -1) {
+      if (existingIndex !== -1) {
+        // Update existing entry with final closed data
+        buffer[existingIndex] = candle;
+      } else {
         // New closed candle - add to buffer
         buffer.push(candle);
+      }
 
-        // Maintain buffer size
-        if (buffer.length > this.bufferSize) {
-          buffer.shift();
-        }
+      // Maintain buffer size
+      if (buffer.length > this.bufferSize) {
+        buffer.shift();
+      }
 
-        this.candleBuffers.set(candle.symbol, buffer);
+      this.candleBuffers.set(candle.symbol, buffer);
 
+      // Fire callback only if this candle wasn't already processed as closed
+      if (!alreadyClosed) {
         logger.info('BinanceService', `New closed candle: ${candle.symbol}`, {
           time: new Date(candle.closeTime).toISOString(),
           close: candle.close,
           volume: candle.volume,
         });
 
-        // Notify callbacks
         this.candleCallbacks.forEach(callback => {
           try {
             callback(candle);
