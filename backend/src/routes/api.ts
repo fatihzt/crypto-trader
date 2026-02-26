@@ -4,7 +4,7 @@
 
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { TradingEngine } from '../services/engine.js';
-import { supabase } from '../config/supabase.js';
+import { sql } from '../config/supabase.js';
 import { logger } from '../utils/logger.js';
 
 interface QueryParams {
@@ -44,17 +44,9 @@ export async function apiRoutes(fastify: FastifyInstance, engine: TradingEngine)
     try {
       const limit = parseInt(request.query.limit || '50', 10);
 
-      const { data, error } = await supabase
-        .from('trades')
-        .select('*')
-        .order('exit_time', { ascending: false })
-        .limit(limit);
+      const data = await sql`SELECT * FROM trades ORDER BY exit_time DESC LIMIT ${limit}`;
 
-      if (error) {
-        throw error;
-      }
-
-      return data || [];
+      return data;
     } catch (error) {
       logger.error('API', 'Failed to get closed trades', error);
       throw error;
@@ -72,22 +64,14 @@ export async function apiRoutes(fastify: FastifyInstance, engine: TradingEngine)
     }
   });
 
-  // GET /api/signals - Recent signals (from supabase, ?limit=20)
+  // GET /api/signals - Recent signals (from db, ?limit=20)
   fastify.get<{ Querystring: QueryParams }>('/api/signals', async (request: FastifyRequest<{ Querystring: QueryParams }>) => {
     try {
       const limit = parseInt(request.query.limit || '20', 10);
 
-      const { data, error } = await supabase
-        .from('signals')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const data = await sql`SELECT * FROM signals ORDER BY created_at DESC LIMIT ${limit}`;
 
-      if (error) {
-        throw error;
-      }
-
-      return data || [];
+      return data;
     } catch (error) {
       logger.error('API', 'Failed to get signals', error);
       throw error;
@@ -105,22 +89,14 @@ export async function apiRoutes(fastify: FastifyInstance, engine: TradingEngine)
     }
   });
 
-  // GET /api/decisions - LLM decisions (from supabase, ?limit=20)
+  // GET /api/decisions - LLM decisions (from db, ?limit=20)
   fastify.get<{ Querystring: QueryParams }>('/api/decisions', async (request: FastifyRequest<{ Querystring: QueryParams }>) => {
     try {
       const limit = parseInt(request.query.limit || '20', 10);
 
-      const { data, error } = await supabase
-        .from('llm_decisions')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(limit);
+      const data = await sql`SELECT * FROM llm_decisions ORDER BY created_at DESC LIMIT ${limit}`;
 
-      if (error) {
-        throw error;
-      }
-
-      return data || [];
+      return data;
     } catch (error) {
       logger.error('API', 'Failed to get LLM decisions', error);
       throw error;

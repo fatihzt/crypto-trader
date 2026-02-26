@@ -17,9 +17,8 @@ export const env = {
   PORT: parseInt(optionalEnv('PORT', '3001'), 10),
   NODE_ENV: optionalEnv('NODE_ENV', 'development'),
 
-  // Supabase
-  SUPABASE_URL: requireEnv('SUPABASE_URL'),
-  SUPABASE_SERVICE_KEY: requireEnv('SUPABASE_SERVICE_KEY'),
+  // PostgreSQL
+  DATABASE_URL: requireEnv('DATABASE_URL'),
 
   // OpenAI
   OPENAI_API_KEY: requireEnv('OPENAI_API_KEY'),

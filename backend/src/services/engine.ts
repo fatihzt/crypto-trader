@@ -11,7 +11,7 @@ import { TraderService } from './trader.js';
 import { NewsService } from './news.js';
 import { LLMFilterService } from './llm-filter.js';
 import { NotificationService } from './notification.js';
-import { supabase } from '../config/supabase.js';
+import { sql } from '../config/supabase.js';
 import { logger } from '../utils/logger.js';
 import type {
   DEFAULT_CONFIG,
@@ -194,7 +194,7 @@ export class TradingEngine {
             const analysis = await this.llm.analyzeClosedTrade(trade);
             trade.postTradeAnalysis = analysis;
 
-            // Save closed trade to Supabase
+            // Save closed trade to database
             await this.saveClosedTrade(trade);
 
             // Notify trade closed
@@ -228,7 +228,7 @@ export class TradingEngine {
         const llmDecision = await this.llm.evaluateSignal(signal, newsItems, fearGreed);
         this.lastLLMDecision = llmDecision;
 
-        // Save signal and LLM decision to Supabase
+        // Save signal and LLM decision to database
         await this.saveSignal(signal);
         await this.saveLLMDecision(llmDecision);
 
@@ -271,113 +271,97 @@ export class TradingEngine {
   }
 
   /**
-   * Save signal to Supabase
+   * Save signal to database.
+   * indicators and regime are JSONB columns — wrap with sql.json() so postgres.js
+   * serialises them correctly instead of attempting to bind as a plain parameter.
    */
   private async saveSignal(signal: TradeSignal): Promise<void> {
     try {
-      const { error } = await supabase.from('signals').insert({
-        id: signal.id,
-        symbol: signal.symbol,
-        direction: signal.direction,
-        strength: signal.strength,
-        entry_price: signal.entryPrice,
-        stop_loss: signal.stopLoss,
-        take_profit: signal.takeProfit,
-        risk_reward_ratio: signal.riskRewardRatio,
-        reason: signal.reason,
-        indicators: signal.indicators,
-        regime: signal.regime,
-      });
-
-      if (error) {
-        throw error;
-      }
+      await sql`
+        INSERT INTO signals (
+          id, symbol, direction, strength, entry_price, stop_loss,
+          take_profit, risk_reward_ratio, reason, indicators, regime
+        ) VALUES (
+          ${signal.id}, ${signal.symbol}, ${signal.direction}, ${signal.strength},
+          ${signal.entryPrice}, ${signal.stopLoss}, ${signal.takeProfit},
+          ${signal.riskRewardRatio}, ${signal.reason},
+          ${sql.json(signal.indicators as never)}, ${sql.json(signal.regime as never)}
+        )
+      `;
     } catch (error) {
-      this.handleError('Failed to save signal to Supabase', error);
+      this.handleError('Failed to save signal to database', error);
     }
   }
 
   /**
-   * Save LLM decision to Supabase
+   * Save LLM decision to database.
+   * newsContext is a string array (JSONB column) — wrap with sql.json().
    */
   private async saveLLMDecision(decision: LLMFilterResult): Promise<void> {
     try {
-      const { error } = await supabase.from('llm_decisions').insert({
-        signal_id: decision.signalId,
-        decision: decision.decision,
-        confidence: decision.confidence,
-        reasoning: decision.reasoning,
-        delay_minutes: decision.delayMinutes,
-        news_context: decision.newsContext,
-      });
-
-      if (error) {
-        throw error;
-      }
+      await sql`
+        INSERT INTO llm_decisions (
+          signal_id, decision, confidence, reasoning, delay_minutes, news_context
+        ) VALUES (
+          ${decision.signalId}, ${decision.decision}, ${decision.confidence},
+          ${decision.reasoning}, ${decision.delayMinutes ?? null},
+          ${sql.json(decision.newsContext as never)}
+        )
+      `;
     } catch (error) {
-      this.handleError('Failed to save LLM decision to Supabase', error);
+      this.handleError('Failed to save LLM decision to database', error);
     }
   }
 
   /**
-   * Save closed trade to Supabase
+   * Save closed trade to database.
    */
   private async saveClosedTrade(trade: import('../types/index.js').ClosedTrade): Promise<void> {
     try {
-      const { error } = await supabase.from('trades').insert({
-        id: trade.id,
-        symbol: trade.symbol,
-        direction: trade.direction,
-        entry_price: trade.entryPrice,
-        exit_price: trade.exitPrice,
-        quantity: trade.quantity,
-        entry_time: new Date(trade.entryTime).toISOString(),
-        exit_time: new Date(trade.exitTime).toISOString(),
-        pnl: trade.pnl,
-        pnl_percent: trade.pnlPercent,
-        commission: trade.commission,
-        outcome: trade.outcome,
-        exit_reason: trade.exitReason,
-        signal_id: trade.signalId,
-        post_trade_analysis: trade.postTradeAnalysis,
-        is_open: false,
-      });
-
-      if (error) {
-        throw error;
-      }
+      await sql`
+        INSERT INTO trades (
+          id, symbol, direction, entry_price, exit_price, quantity,
+          entry_time, exit_time, pnl, pnl_percent, commission, outcome,
+          exit_reason, signal_id, post_trade_analysis, is_open
+        ) VALUES (
+          ${trade.id}, ${trade.symbol}, ${trade.direction}, ${trade.entryPrice},
+          ${trade.exitPrice}, ${trade.quantity},
+          ${new Date(trade.entryTime).toISOString()}, ${new Date(trade.exitTime).toISOString()},
+          ${trade.pnl}, ${trade.pnlPercent}, ${trade.commission}, ${trade.outcome},
+          ${trade.exitReason}, ${trade.signalId},
+          ${trade.postTradeAnalysis ?? null}, ${false}
+        )
+      `;
     } catch (error) {
-      this.handleError('Failed to save closed trade to Supabase', error);
+      this.handleError('Failed to save closed trade to database', error);
     }
   }
 
   /**
-   * Save portfolio snapshot to Supabase
+   * Save portfolio snapshot to database.
+   * positions is a Position[] (JSONB column) — wrap with sql.json().
    */
   private async savePortfolioSnapshot(): Promise<void> {
     try {
       const state = this.portfolio.getState();
 
-      const { error } = await supabase.from('portfolio_snapshots').insert({
-        total_equity: state.totalEquity,
-        available_cash: state.availableCash,
-        positions: state.positions,
-        total_pnl: state.totalPnL,
-        total_pnl_percent: state.totalPnLPercent,
-        total_trades: state.totalTrades,
-        win_rate: state.winRate,
-      });
-
-      if (error) {
-        throw error;
-      }
+      await sql`
+        INSERT INTO portfolio_snapshots (
+          total_equity, available_cash, positions, total_pnl,
+          total_pnl_percent, total_trades, win_rate
+        ) VALUES (
+          ${state.totalEquity}, ${state.availableCash},
+          ${sql.json(state.positions as never)}, ${state.totalPnL},
+          ${state.totalPnLPercent}, ${state.totalTrades}, ${state.winRate}
+        )
+      `;
 
       logger.info('TradingEngine', 'Portfolio snapshot saved', {
         equity: state.totalEquity.toFixed(2),
         pnl: state.totalPnL.toFixed(2),
       });
     } catch (error) {
-      this.handleError('Failed to save portfolio snapshot to Supabase', error);
+      this.handleError('Failed to save portfolio snapshot to database', error);
     }
   }
 
